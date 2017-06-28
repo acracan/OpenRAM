@@ -73,7 +73,7 @@ class setup_hold():
                             noise_margin=noise_margin, 
                             period=period)
 
-        self.write_control(period=period)
+        stimuli.write_control(self.sf,2*period)
 
         self.sf.close()
 
@@ -153,8 +153,6 @@ class setup_hold():
 
         self.sf.write("* Measure statements for pass/fail verification\n")
         self.sf.write(".IC v({0})={1}\n".format(self.output_name, incorrect_value))
-        #self.sf.write(".MEASURE TRAN {0}VOUT {0} v({1}) GOAL={2}\n".format(max_or_min, output_name, noise_margin))
-        # above is the old cmd for hspice, below is the one work for both
         self.sf.write(".MEASURE TRAN {0}VOUT {0} v({1}) from ={2}n to ={3}n\n".format(max_or_min,
                                                                                       self.output_name,
                                                                                       1.5*period,
@@ -162,15 +160,6 @@ class setup_hold():
         self.sf.write("\n")
 
 
-    def write_control(self, period):
-        # transient window
-        end_time = 2 * period
-        self.sf.write(".TRAN 5p {0}n\n".format(end_time))
-        self.sf.write(".OPTIONS POST=1 PROBE\n")
-        # create plots for all signals
-        self.sf.write(".probe V(*)\n")
-        # end the stimulus file
-        self.sf.write(".end\n")
 
     def bidir_search(self, correct_value, noise_margin, measure_name, mode):
         """ This will perform a bidirectional search for either setup or hold times.

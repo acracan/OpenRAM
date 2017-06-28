@@ -400,13 +400,14 @@ def gen_trap_pwl(stim_file, sig_name, x_list, y_list, t_rise, t_fall):
 
 
 
-def gen_meas_delay(stim_file, meas_name, trig_name, targ_name, trig_val, targ_val, trig_dir, targ_dir, td):
+def gen_meas_delay(stim_file, meas_name, trig_name, targ_name, trig_val, targ_val, trig_dir, trig_cnt, targ_dir, td):
     """Creates the .meas statement for the measurement of delay"""
-    measure_string=".meas tran {0} TRIG v({1}) VAL={2} RISE={3} TARG v({4}) VAL={5} TD={7}n {6}=1\n"
+    measure_string=".meas tran {0} TRIG v({1}) VAL={2} {3}={4} TARG v({5}) VAL={6} TD={8}n {7}=1\n"
     stim_file.write(measure_string.format(meas_name,
                                           trig_name,
                                           trig_val,
                                           trig_dir,
+                                          trig_cnt,
                                           targ_name,
                                           targ_val,
                                           targ_dir,
@@ -423,6 +424,14 @@ def gen_meas_power(stim_file, meas_name, t_initial, t_final):
                                                                         power_exp,
                                                                         t_initial,
                                                                         t_final))
+
+def write_control(stim_file, end_time):
+    stim_file.write(".TRAN 5p {0}n\n".format(end_time))
+    stim_file.write(".OPTIONS POST=1 RUNLEVEL=4 PROBE\n")
+    # create plots for all signals
+    stim_file.write(".probe V(*)\n")
+    # end the stimulus file
+    stim_file.write(".end\n")
 
 
 def write_include(stim_file, models):

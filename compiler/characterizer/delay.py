@@ -208,7 +208,8 @@ class delay():
 
         self.write_measures(data_value)
 
-        self.write_control()
+        # run until the last cycle time
+        stimuli.write_control(self.sf,self.cycle_times[-1])
 
         self.sf.close()
 
@@ -229,7 +230,7 @@ class delay():
         trig_name = tech.spice["clk"] + "_buf_buf"
         targ_name = "{0}".format("DATA[{0}]".format(self.probe_data))
         trig_val = targ_val = 0.5 * tech.spice["supply_voltage"]
-        trig_dir = self.read_cycle
+        trig_cnt = self.read_cycle
         targ_dir = "RISE" if data_value == tech.spice["supply_voltage"] else "FALL"
         td = self.cycle_times[self.clear_bus_cycle]
         stimuli.gen_meas_delay(stim_file=self.sf,
@@ -238,7 +239,8 @@ class delay():
                                targ_name=targ_name,
                                trig_val=trig_val,
                                targ_val=targ_val,
-                               trig_dir=trig_dir,
+                               trig_dir="RISE",
+                               trig_cnt=trig_cnt,
                                targ_dir=targ_dir,
                                td=td)
 
@@ -259,16 +261,6 @@ class delay():
         self.sf.write("\n")
 
 
-    def write_control(self):
-        # run until the last cycle time
-        end_time = self.cycle_times[-1]
-        self.sf.write(".TRAN 5p {0}n\n".format(end_time))
-        self.sf.write(".OPTIONS POST=1 PROBE\n")
-        # create plots for all signals
-        self.sf.write(".probe V(*)\n")
-        # end the stimulus file
-        self.sf.write(".end\n")
-
 
 
     def find_feasible_period(self,initial_period):
@@ -287,52 +279,50 @@ class delay():
             if (time_out <= 0):
                 debug.error("Timed out, could not find a feasible period.",2)
 
-            (success, delay_out)=self.try_period(feasible_period,feasible_period,tech.spice["supply_voltage"])                
+            (success, feasible_delay1)=self.try_feasible_period(feasible_period,tech.spice["supply_voltage"])                
             if not success:
                 feasible_period = 2 * feasible_period
                 continue
 
-            (success, delay_out)=self.try_period(feasible_period,feasible_period,tech.spice["gnd_voltage"])                
+            (success, feasible_delay0)=self.try_feasible_period(feasible_period,tech.spice["gnd_voltage"])                
             if not success:
                 feasible_period = 2 * feasible_period
                 continue
 
-            debug.info(1, "Starting Binary Search Algorithm with feasible_period: {0}ns".format(feasible_period))
-            return feasible_period
+            (success, feasible_delay1)=self.try_feasible_period(feasible_period,tech.spice["supply_voltage"])
+            (success, feasible_delay0)=self.try_feasible_period(feasible_period,tech.spice["gnd_voltage"])
+            
+            debug.info(1, "Starting Binary Search Algorithm with feasible_period: {0}ns feasible_delay1/0 {1}ns/{2}ns".format(feasible_period,feasible_delay1,feasible_delay0))
+            return (feasible_period, feasible_delay1, feasible_delay0)
 
 
-    def try_period(self, feasible_period, target_period, data_value):
+    def try_feasible_period(self, feasible_period, data_value):
         """ This tries to simulate a period and checks if the result
-        works. If so, it returns True.  If not, it it doubles the
-        period and returns False."""
+        works. If so, it returns True and the feasible output delay."""
 
         # Checking from not data_value to data_value
-        self.write_stimulus(feasible_period, target_period, data_value)
+        self.write_stimulus(feasible_period, feasible_period, data_value)
         stimuli.run_sim()
         delay_value = ch.convert_to_float(ch.parse_output("timing", "delay"))
         
         # if it failed or the read was longer than a period
-        if type(delay_value)!=float or delay_value*1e9>target_period:
-            debug.info(2,"Infeasible period " + str(target_period) + " delay " + str(delay_value*1e9) + "ns")
-            return (False, "NA")
+        if type(delay_value)!=float:
+            return (False,0)
         else:
-            debug.info(2,"Feasible period " + str(feasible_period) \
-                           + ", target period " + str(target_period) \
-                           + ", read/write of " + str(data_value) \
-                           + ", delay=" + str(delay_value*1e9) + "ns")
+            feasible_delay = delay_value*1e9-0.5*feasible_period
+            debug.info(2,"Feasible period {0}, read/write of {1}, delay={2}ns".format(feasible_period,data_value,feasible_delay))
         #key=raw_input("press return to continue")
 
-        return (True, delay_value*1e9)
+        # The delay is from the negative edge for our SRAM
+        return (True,feasible_delay)
 
 
-    def find_min_period(self,data_value):
+
+    def find_min_period(self,data_value,feasible_period,feasible_delay):
         """Creates a spice test and instantiates a single SRAM for
         testing.  Returns a tuple of the lowest period and its
         clk-to-q delay for the specified data_value."""
 
-        # Find a valid and feasible period before starting the binary search
-        # We just try 2.0ns here, but any value would work albeit slower.
-        feasible_period = self.find_feasible_period(tech.spice["feasible_period"])
         previous_period = ub_period = feasible_period
         lb_period = 0.0
 
@@ -348,20 +338,34 @@ class delay():
                                                                              ub_period,
                                                                              lb_period))
 
-            (success, delay_out) = self.try_period(feasible_period, target_period, data_value)
-            if success:
+            if self.try_period(feasible_period, feasible_delay, target_period, data_value):
                 ub_period = target_period
             else:
                 lb_period = target_period
 
-            if ch.relative_compare(ub_period, lb_period):
-                # use the two values to compare, but only return the ub since it is guaranteed feasible
-                (success, delay_out) = self.try_period(feasible_period, ub_period, data_value)
-                return (ub_period, delay_out)
+            if ch.relative_compare(ub_period, lb_period, error_tolerance=0.01):
+                # ub_period is always feasible
+                return ub_period
 
-        self.error("Should not reach here.",-1)
-        return (target_period, delay_out)
 
+    def try_period(self, feasible_period, feasible_delay, target_period, data_value):
+        """ This tries to simulate a period and checks if the result
+        works. If it does and the delay is within 5% still, it returns True."""
+
+        # Checking from not data_value to data_value
+        self.write_stimulus(feasible_period, target_period, data_value)
+        stimuli.run_sim()
+        delay_value = ch.convert_to_float(ch.parse_output("timing", "delay"))
+        
+        # if it failed or the read was longer than a period
+        if type(delay_value)!=float or ch.relative_compare(delay_value*1e9,feasible_delay,error_tolerance=0.05):
+            return False
+        else:
+            debug.info(2,"Feasible period {0}, target period {1}, read/write of {2}, delay={3}ns".format(feasible_period,target_period,data_value,delay_value*1e9))
+        #key=raw_input("press return to continue")
+
+        return True
+    
     def set_probe(self,probe_address, probe_data):
         """ Probe address and data can be set separately to utilize other
         functions in this characterizer besides analyze."""
@@ -376,21 +380,24 @@ class delay():
         """
         self.set_probe(probe_address, probe_data)
 
-        (min_period1, delay1) = self.find_min_period(tech.spice["supply_voltage"])
-        if (min_period1 == None) or (delay1 == None):
+        (feasible_period, feasible_delay1, feasible_delay0) = self.find_feasible_period(tech.spice["feasible_period"])
+        
+        min_period1 = self.find_min_period(feasible_period, feasible_delay1, tech.spice["supply_voltage"])
+        if min_period1 == None:
             return None
-        debug.info(1, "Min Period for low_to_high transistion: {0}n with a delay of {1}".format(min_period1, delay1))
-        (min_period0, delay0) = self.find_min_period(tech.spice["gnd_voltage"])
-        if (min_period0 == None) or (delay0 == None):
+        debug.info(1, "Min Period for low_to_high transistion: {0}n with a delay of {1}".format(min_period1, feasible_delay1))
+        min_period0 = self.find_min_period(feasible_period, feasible_delay0, tech.spice["gnd_voltage"])
+        if min_period0 == None:
             return None
-        debug.info(1, "Min Period for high_to_low transistion: {0}n with a delay of {1}".format(min_period0, delay0))
+        debug.info(1, "Min Period for high_to_low transistion: {0}n with a delay of {1}".format(min_period0, feasible_delay0))
+        
         read_power=ch.convert_to_float(ch.parse_output("timing", "power_read"))
         write_power=ch.convert_to_float(ch.parse_output("timing", "power_write"))
 
-        data = {"min_period1": min_period1,  # period in ns
-                "delay1": delay1, # delay in s
+        data = {"min_period1": min_period1, 
+                "delay1": feasible_delay1, 
                 "min_period0": min_period0,
-                "delay0": delay0,
+                "delay0": feasible_delay0,
                 "read_power": read_power,
                 "write_power": write_power
                 }
