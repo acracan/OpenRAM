@@ -22,7 +22,9 @@ class delay():
         self.word_size = sram.word_size
         self.addr_size = sram.addr_size
         self.sram_sp_file = spfile
-
+        
+        self.vdd = tech.spice["supply_voltage"]
+        self.gnd = tech.spice["gnd_voltage"]
 
     def check_arguments(self):
         """Checks if arguments given for write_stimulus() meets requirements"""
@@ -38,7 +40,7 @@ class delay():
             debug.error("Given probe_data is not an integer to specify a data bit",1)
 
 
-    def write_stimulus(self, feasible_period, target_period, data_value):
+    def write_stimulus(self, period):
         """Creates a stimulus file for simulations to probe a certain bitcell, given an address and data-position of the data-word 
         (probe-address form: '111010000' LSB=0, MSB=1)
         (probe_data form: number corresponding to the bit position of data-bus, begins with position 0) 
@@ -46,28 +48,25 @@ class delay():
         self.check_arguments()
 
         # obtains list of time-points for each rising clk edge
-        self.obtain_cycle_times(slow_period=feasible_period,
-                                fast_period=target_period)
+        self.obtain_cycle_times(period)
 
         # creates and opens stimulus file for writing
         temp_stim = "{0}/stim.sp".format(OPTS.openram_temp)
         self.sf = open(temp_stim, "w")
-        self.sf.write("* Stimulus data value of {0} for target period of {1}n\n".format(data_value, target_period))
-        self.sf.write("\n")
+        self.sf.write("* Stimulus for period of {0}n\n\n".format(period))
 
         # include files in stimulus file
         model_list = tech.spice["fet_models"] + [self.sram_sp_file]
         stimuli.write_include(stim_file=self.sf, models=model_list)
-        self.sf.write("\n")
 
         # add vdd/gnd statements
+
         self.sf.write("* Global Power Supplies\n")
         stimuli.write_supply(stim_file=self.sf,
                              vdd_name=tech.spice["vdd_name"],
                              gnd_name=tech.spice["gnd_name"],
-                             vdd_voltage=tech.spice["supply_voltage"],
-                             gnd_voltage=tech.spice["gnd_voltage"])
-        self.sf.write("\n")
+                             vdd_voltage=self.vdd,
+                             gnd_voltage=self.gnd)
 
         # instantiate the sram
         self.sf.write("* Instantiation of the SRAM\n")
@@ -75,7 +74,6 @@ class delay():
                           abits=self.addr_size, 
                           dbits=self.word_size, 
                           sram_name=self.name)
-        self.sf.write("\n")
 
         # create a buffer and an inverter
         self.sf.write("* Buffers and inverter Initialization\n")
@@ -85,19 +83,16 @@ class delay():
         stimuli.create_buffer(stim_file=self.sf,
                               buffer_name="clk1_buffer",
                               size=[1, 4])
-        self.sf.write("\n")
+
         stimuli.create_buffer(stim_file=self.sf,
                               buffer_name="clk2_buffer",
                               size=[8, 16])
-        self.sf.write("\n")
 
         stimuli.create_buffer(stim_file=self.sf,
                               buffer_name="buffer",
                               size=[1, 2])
-        self.sf.write("\n")
 
         stimuli.create_inverter(stim_file=self.sf)
-        self.sf.write("\n")
 
         # add a buffer for each signal and an inverter for WEb
         signal_list = []
@@ -107,159 +102,122 @@ class delay():
             signal_list.append("A[{0}]".format(j))
         for k in tech.spice["control_signals"]:
             signal_list.append(k)
-        self.sf.write("*Buffers for each generated signal and Inv for WEb\n")
-        stimuli.add_buffer(stim_file=self.sf,
+        self.sf.write("* Buffers for each generated signal\n")
+        stimuli.inst_buffer(stim_file=self.sf,
                            buffer_name="buffer",
                            signal_list=signal_list)
-        stimuli.add_buffer(stim_file=self.sf,
+        stimuli.inst_buffer(stim_file=self.sf,
                            buffer_name="clk1_buffer",
                            signal_list=["clk"])
-        stimuli.add_buffer(stim_file=self.sf,
+        stimuli.inst_buffer(stim_file=self.sf,
                            buffer_name="clk2_buffer",
                            signal_list=["clk_buf"])
-        stimuli.add_buffer(stim_file=self.sf,
-                           buffer_name="buffer",
-                           signal_list=["WEb_trans"])
-        stimuli.add_inverter(stim_file=self.sf,
-                             signal_list=["WEb_trans"])
-        self.sf.write("\n")
 
         # add access transistors for data-bus
-        self.sf.write("* Transmission Gates for data-bus\n")
-        stimuli.add_accesstx(stim_file=self.sf, dbits=self.word_size)
-        self.sf.write("\n")
+        self.sf.write("* Transmission Gates for data-bus and control signals\n")
+        stimuli.inst_accesstx(stim_file=self.sf, dbits=self.word_size)
 
         # generate data and addr signals
-        self.sf.write("*Generation of data and address signals\n")
-        if data_value == tech.spice["supply_voltage"]:
-            v_val = tech.spice["gnd_voltage"] 
-        else:
-            v_val = tech.spice["supply_voltage"] 
+        self.sf.write("* Generation of data and address signals\n")
         for i in range(self.word_size):
             if i == self.probe_data:
-                stimuli.gen_data_pwl(stim_file=self.sf,
-                                     key_times=self.cycle_times,
-                                     sig_name="D[{0}]".format(i),
-                                     data_value=data_value,
-                                     feasible_period=feasible_period,
-                                     target_period=target_period,
-                                     t_rise=tech.spice["rise_time"],
-                                     t_fall=tech.spice["fall_time"])
+                stimuli.gen_data(stim_file=self.sf,
+                                 clk_times=self.cycle_times,
+                                 sig_name="D[{0}]".format(i),
+                                 period=period,
+                                 slew=self.slew)
             else:
                 stimuli.gen_constant(stim_file=self.sf,
                                      sig_name="D[{0}]".format(i),
-                                     v_ref=tech.spice["gnd_voltage"],
-                                     v_val=v_val)
+                                     v_val=self.gnd)
 
-        stimuli.gen_addr_pwl(stim_file=self.sf,
-                             key_times=self.cycle_times,
-                             addr=self.probe_address,
-                             feasible_period=feasible_period,
-                             target_period=target_period,
-                             t_rise=tech.spice["rise_time"],
-                             t_fall=tech.spice["fall_time"])
-        self.sf.write("\n")
+        stimuli.gen_addr(self.sf,
+                         clk_times=self.cycle_times,
+                         addr=self.probe_address,
+                         period=period,
+                         slew=self.slew)
 
         # generate control signals
-        self.sf.write("*Generation of control signals\n")
-        # CSb
-        (x_list, y_list) = stimuli.gen_csb_pwl(key_times=self.cycle_times,
-                                               feasible_period=feasible_period,
-                                               target_period=target_period,
-                                               t_rise=tech.spice["rise_time"],
-                                               t_fall=tech.spice["fall_time"])
-        stimuli.gen_pwl(stim_file=self.sf,
-                        sig_name="CSb",
-                        x_list=x_list,
-                        y_list=y_list)
-        # WEb
-        (x_list, y_list) = stimuli.gen_web_pwl(key_times=self.cycle_times,
-                                               feasible_period=feasible_period,
-                                               target_period=target_period,
-                                               t_rise=tech.spice["rise_time"],
-                                               t_fall=tech.spice["fall_time"])
-        stimuli.gen_pwl(stim_file=self.sf,
-                                sig_name="WEb",
-                                x_list=x_list,
-                                y_list=y_list)
-        # OEb
-        (x_list, y_list) = stimuli.gen_oeb_pwl(key_times=self.cycle_times,
-                                               feasible_period=feasible_period,
-                                               target_period=target_period,
-                                               t_rise=tech.spice["rise_time"],
-                                               t_fall=tech.spice["fall_time"])
-        stimuli.gen_pwl(stim_file=self.sf,
-                                sig_name="OEb",
-                                x_list=x_list,
-                                y_list=y_list)
-        # WEb_transmission_gate
-        (x_list, y_list) = stimuli.gen_web_trans_pwl(key_times=self.cycle_times,
-                                                     feasible_period=feasible_period,
-                                                     target_period=target_period, 
-                                                     t_rise=tech.spice["rise_time"],
-                                                     t_fall=tech.spice["fall_time"])
-        stimuli.gen_pwl(stim_file=self.sf,
-                                sig_name="WEb_trans",
-                                x_list=x_list,
-                                y_list=y_list)
-        self.sf.write("\n")
+        self.sf.write("* Generation of control signals\n")
+        stimuli.gen_csb(self.sf, self.cycle_times, period, self.slew)
+        stimuli.gen_web(self.sf, self.cycle_times, period, self.slew)
+        stimuli.gen_oeb(self.sf, self.cycle_times, period, self.slew)
+        stimuli.gen_web_trans(self.sf, self.cycle_times, period, self.slew)
 
-        self.write_clock()
-
-        self.write_measures(data_value)
+        self.sf.write("* Generation of global clock signal\n")
+        stimuli.gen_pulse(stim_file=self.sf,
+                          sig_name="CLK",
+                          v1=self.gnd,
+                          v2=self.vdd,
+                          offset=period,
+                          period=period,
+                          t_rise = self.slew,
+                          t_fall = self.slew)
+                          
+        self.write_measures()
 
         # run until the last cycle time
         stimuli.write_control(self.sf,self.cycle_times[-1])
 
         self.sf.close()
 
-    def write_clock(self):
-        # generate clk PWL based on the clock periods
-        self.sf.write("* Generation of global clock signal\n")
-        stimuli.gen_clk_pwl(stim_file=self.sf,
-                            cycle_times=self.cycle_times,
-                            t_rise=tech.spice["rise_time"],
-                            t_fall=tech.spice["fall_time"])
-        self.sf.write("\n")
-
-    def write_measures(self, data_value):
+    def write_measures(self):
         # meas statement for delay and power measurements
         self.sf.write("* Measure statements for delay and power\n")
 
-        # add measure statments for delay
         trig_name = tech.spice["clk"] + "_buf_buf"
         targ_name = "{0}".format("DATA[{0}]".format(self.probe_data))
-        trig_val = targ_val = 0.5 * tech.spice["supply_voltage"]
-        trig_cnt = self.read_cycle
-        targ_dir = "RISE" if data_value == tech.spice["supply_voltage"] else "FALL"
-        td = self.cycle_times[self.clear_bus_cycle]
+        trig_val = targ_val = 0.5 * self.vdd
+        # add measure statments for delay0
         stimuli.gen_meas_delay(stim_file=self.sf,
-                               meas_name="DELAY",
+                               meas_name="DELAY0",
                                trig_name=trig_name,
                                targ_name=targ_name,
                                trig_val=trig_val,
                                targ_val=targ_val,
-                               trig_dir="RISE",
-                               trig_cnt=trig_cnt,
-                               targ_dir=targ_dir,
-                               td=td)
+                               trig_dir="FALL",
+                               targ_dir="FALL",
+                               td=self.cycle_times[self.read0_cycle])
 
+        stimuli.gen_meas_delay(stim_file=self.sf,
+                               meas_name="DELAY1",
+                               trig_name=trig_name,
+                               targ_name=targ_name,
+                               trig_val=trig_val,
+                               targ_val=targ_val,
+                               trig_dir="FALL",
+                               targ_dir="RISE",
+                               td=self.cycle_times[self.read1_cycle])
+        
         # add measure statements for power
-        t_initial = self.cycle_times[self.write_cycle]
-        t_final = self.cycle_times[self.write_cycle+1]
+        t_initial = self.cycle_times[self.write0_cycle]
+        t_final = self.cycle_times[self.write0_cycle+1]
         stimuli.gen_meas_power(stim_file=self.sf,
-                               meas_name="POWER_WRITE",
+                               meas_name="WRITE0_POWER",
                                t_initial=t_initial,
                                t_final=t_final)
 
-        t_initial = self.cycle_times[self.read_cycle]
-        t_final = self.cycle_times[self.read_cycle+1]
+        t_initial = self.cycle_times[self.write1_cycle]
+        t_final = self.cycle_times[self.write1_cycle+1]
         stimuli.gen_meas_power(stim_file=self.sf,
-                               meas_name="POWER_READ",
+                               meas_name="WRITE1_POWER",
                                t_initial=t_initial,
                                t_final=t_final)
-        self.sf.write("\n")
+        
+        t_initial = self.cycle_times[self.read0_cycle]
+        t_final = self.cycle_times[self.read0_cycle+1]
+        stimuli.gen_meas_power(stim_file=self.sf,
+                               meas_name="READ0_POWER",
+                               t_initial=t_initial,
+                               t_final=t_final)
 
+        t_initial = self.cycle_times[self.read1_cycle]
+        t_final = self.cycle_times[self.read1_cycle+1]
+        stimuli.gen_meas_power(stim_file=self.sf,
+                               meas_name="READ1_POWER",
+                               t_initial=t_initial,
+                               t_final=t_final)
+        
 
 
 
@@ -279,49 +237,42 @@ class delay():
             if (time_out <= 0):
                 debug.error("Timed out, could not find a feasible period.",2)
 
-            (success, feasible_delay1)=self.try_feasible_period(feasible_period,tech.spice["supply_voltage"])                
+            (success, feasible_delay0, feasible_delay1)=self.try_feasible_period(feasible_period)                
             if not success:
                 feasible_period = 2 * feasible_period
                 continue
 
-            (success, feasible_delay0)=self.try_feasible_period(feasible_period,tech.spice["gnd_voltage"])                
-            if not success:
-                feasible_period = 2 * feasible_period
-                continue
-
-            (success, feasible_delay1)=self.try_feasible_period(feasible_period,tech.spice["supply_voltage"])
-            (success, feasible_delay0)=self.try_feasible_period(feasible_period,tech.spice["gnd_voltage"])
-            
-            debug.info(1, "Starting Binary Search Algorithm with feasible_period: {0}ns feasible_delay1/0 {1}ns/{2}ns".format(feasible_period,feasible_delay1,feasible_delay0))
-            return (feasible_period, feasible_delay1, feasible_delay0)
+            debug.info(1, "Starting Binary Search Algorithm with feasible_period: {0}ns feasible_delay0/1 {1}ns/{2}ns".format(feasible_period,feasible_delay0,feasible_delay1))
+            return (feasible_period, feasible_delay0, feasible_delay1)
 
 
-    def try_feasible_period(self, feasible_period, data_value):
+    def try_feasible_period(self, period):
         """ This tries to simulate a period and checks if the result
         works. If so, it returns True and the feasible output delay."""
 
         # Checking from not data_value to data_value
-        self.write_stimulus(feasible_period, feasible_period, data_value)
+        self.write_stimulus(period)
         stimuli.run_sim()
-        delay_value = ch.convert_to_float(ch.parse_output("timing", "delay"))
+        delay0 = ch.convert_to_float(ch.parse_output("timing", "delay0"))
+        delay1 = ch.convert_to_float(ch.parse_output("timing", "delay1"))        
         
         # if it failed or the read was longer than a period
-        if type(delay_value)!=float:
-            return (False,0)
+        if type(delay0)!=float or type(delay1)!=float:
+            return (False,0,0)
         else:
-            feasible_delay = delay_value*1e9-0.5*feasible_period
-            debug.info(2,"Feasible period {0}, read/write of {1}, delay={2}ns".format(feasible_period,data_value,feasible_delay))
+            delay0 *= 1e9
+            delay1 *= 1e9
+            debug.info(2,"Feasible period {0}, delay0={1}n delay1={2}ns".format(period,delay0,delay1))
         #key=raw_input("press return to continue")
 
         # The delay is from the negative edge for our SRAM
-        return (True,feasible_delay)
+        return (True,delay0,delay1)
 
 
 
-    def find_min_period(self,data_value,feasible_period,feasible_delay):
-        """Creates a spice test and instantiates a single SRAM for
-        testing.  Returns a tuple of the lowest period and its
-        clk-to-q delay for the specified data_value."""
+    def find_min_period(self,feasible_period,feasible_delay0, feasible_delay1):
+        """Searches for the smallest period with output delays being within 5% of 
+        long period. """
 
         previous_period = ub_period = feasible_period
         lb_period = 0.0
@@ -338,30 +289,40 @@ class delay():
                                                                              ub_period,
                                                                              lb_period))
 
-            if self.try_period(feasible_period, feasible_delay, target_period, data_value):
+            if self.try_period(target_period, feasible_delay0, feasible_delay1):
                 ub_period = target_period
             else:
                 lb_period = target_period
 
-            if ch.relative_compare(ub_period, lb_period, error_tolerance=0.01):
+            if ch.relative_compare(ub_period, lb_period, error_tolerance=0.05):
                 # ub_period is always feasible
                 return ub_period
 
 
-    def try_period(self, feasible_period, feasible_delay, target_period, data_value):
+    def try_period(self, period, feasible_delay0, feasible_delay1):
         """ This tries to simulate a period and checks if the result
         works. If it does and the delay is within 5% still, it returns True."""
 
         # Checking from not data_value to data_value
-        self.write_stimulus(feasible_period, target_period, data_value)
+        self.write_stimulus(period)
         stimuli.run_sim()
-        delay_value = ch.convert_to_float(ch.parse_output("timing", "delay"))
-        
+        delay0 = ch.convert_to_float(ch.parse_output("timing", "delay0"))
+        delay1 = ch.convert_to_float(ch.parse_output("timing", "delay1"))
+        if type(delay0)==float:
+            delay0 *= 1e9
+        if type(delay1)==float:
+            delay1 *= 1e9
+        debug.info(2,"Period {0}, delay0={1}ns, delay1={2}ns".format(period,delay0, delay1))
         # if it failed or the read was longer than a period
-        if type(delay_value)!=float or ch.relative_compare(delay_value*1e9,feasible_delay,error_tolerance=0.05):
+        if type(delay0)!=float or type(delay1)!=float:
             return False
         else:
-            debug.info(2,"Feasible period {0}, target period {1}, read/write of {2}, delay={3}ns".format(feasible_period,target_period,data_value,delay_value*1e9))
+            if ch.relative_compare(delay1*1e9,feasible_delay1,error_tolerance=0.05):
+                return False
+            elif ch.relative_compare(delay0*1e9,feasible_delay0,error_tolerance=0.05):
+                return False
+
+
         #key=raw_input("press return to continue")
 
         return True
@@ -372,76 +333,80 @@ class delay():
         self.probe_address = probe_address
         self.probe_data = probe_data
 
-    def analyze(self,probe_address, probe_data):
+    def analyze(self,probe_address, probe_data, slew=tech.spice["rise_time"], load=1):
         """main function to calculate the min period for a low_to_high
         transistion and a high_to_low transistion returns a dictionary
         that contains all both the min period and associated delays
         Dictionary Keys: min_period1, delay1, min_period0, delay0
         """
+        self.slew = slew
+        self.load = load
         self.set_probe(probe_address, probe_data)
 
         (feasible_period, feasible_delay1, feasible_delay0) = self.find_feasible_period(tech.spice["feasible_period"])
         
-        min_period1 = self.find_min_period(feasible_period, feasible_delay1, tech.spice["supply_voltage"])
-        if min_period1 == None:
+        min_period = self.find_min_period(feasible_period, feasible_delay1, tech.spice["supply_voltage"])
+        if min_period == None:
             return None
-        debug.info(1, "Min Period for low_to_high transistion: {0}n with a delay of {1}".format(min_period1, feasible_delay1))
-        min_period0 = self.find_min_period(feasible_period, feasible_delay0, tech.spice["gnd_voltage"])
-        if min_period0 == None:
-            return None
-        debug.info(1, "Min Period for high_to_low transistion: {0}n with a delay of {1}".format(min_period0, feasible_delay0))
+        debug.info(1, "Min Period: {0}n with a delay of {1}".format(min_period, feasible_delay1))
         
-        read_power=ch.convert_to_float(ch.parse_output("timing", "power_read"))
-        write_power=ch.convert_to_float(ch.parse_output("timing", "power_write"))
+        read0_power=ch.convert_to_float(ch.parse_output("timing", "read0_power"))
+        write0_power=ch.convert_to_float(ch.parse_output("timing", "write0_power"))
+        read1_power=ch.convert_to_float(ch.parse_output("timing", "read1_power"))
+        write1_power=ch.convert_to_float(ch.parse_output("timing", "write1_power"))
 
-        data = {"min_period1": min_period1, 
+        data = {"min_period": min_period, 
                 "delay1": feasible_delay1, 
-                "min_period0": min_period0,
                 "delay0": feasible_delay0,
-                "read_power": read_power,
-                "write_power": write_power
+                "read_power": (read0_power+read1_power)/2,
+                "write_power": (write0_power+write1_power)/2
                 }
         return data
 
 
-    def obtain_cycle_times(self, slow_period, fast_period):
+    def obtain_cycle_times(self, period):
         """Returns a list of key time-points [ns] of the waveform (each rising edge)
         of the cycles to do a timing evaluation. The last time is the end of the simulation
         and does not need a rising edge."""
 
-        # idle: half cycle, no operation
-        t_current = 0.5 * slow_period 
-
-        # slow cycle1: W data 1 address 1111 to initialize cell to a value
-        self.cycle_times = [t_current]
-        self.init_cycle=1
-        t_current += slow_period
-
-        # slow cycle2: R data 1 address 1111 (to ensure cell was written to opposite data value)
+        # idle cycle, no operation
+        t_current = period 
+        self.cycle_times = []
+        
+        # cycle0: W data 1 address 1111 to initialize cell to a value
         self.cycle_times.append(t_current)
-        self.verify_init_cycle=2
-        t_current += slow_period
+        t_current += period
 
-        # fast cycle3: W data 0 address 1111 (to ensure a write of opposite value works)
+        # cycle1: W data 0 address 1111 (to ensure a write of value works)
         self.cycle_times.append(t_current)
-        self.write_cycle=3
-        t_current += fast_period
+        self.write0_cycle=1
+        t_current += period
+        
+        # cycle2: W data 1 address 0000 (to clear the data bus cap)
+        self.cycle_times.append(t_current)
+        t_current += period
 
-        # fast cycle4: W data 1 address 0000 (to invert the bus cap from prev write)
+        # cycle3: R data 0 address 1111 to check W0 works
         self.cycle_times.append(t_current)
-        self.clear_bus_cycle=4
-        t_current += fast_period
+        self.read0_cycle=3
+        t_current += period
 
-        # fast cycle5: R data 0 address 1111 (to ensure that a read works and gets the value)
+        # cycle4: W data 1 address 1111 (to ensure a write of value works)
         self.cycle_times.append(t_current)
-        self.read_cycle=5
-        t_current += fast_period
+        self.write1_cycle=4
+        t_current += period
 
-        # slow cycle 6: wait a slow clock period  to end the simulation
+        # cycle5: W data 0 address 0000 (to clear the data bus cap)
         self.cycle_times.append(t_current)
-        self.wait_cycle=6
-        t_current += slow_period
+        t_current += period
+        
+        # cycle6: R data 1 address 1111 to check W1 works
+        self.cycle_times.append(t_current)
+        self.read1_cycle=6
+        t_current += period
 
-        # end time of simulation
+        # cycle7: wait a clock period to end the simulation
         self.cycle_times.append(t_current)
+        t_current += period
+
 

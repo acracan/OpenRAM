@@ -299,8 +299,8 @@ class lib:
         self.lib.write("        clock             : true;\n")
         self.lib.write("        direction  : input; \n")
         self.lib.write("        capacitance : {0};  \n".format(tech.spice["FF_in_cap"]))
-        min_pulse_width = (ch.round_time(data["min_period1"]) + ch.round_time(data["min_period0"]))/2.0
-        min_period = min(ch.round_time(data["min_period1"]),ch.round_time(data["min_period0"]))
+        min_pulse_width = ch.round_time(data["min_period"])/2.0
+        min_period = ch.round_time(data["min_period"])
         self.lib.write("        timing(){ \n")
         self.lib.write("            timing_type :\"min_pulse_width\"; \n")
         self.lib.write("            related_pin  : clk; \n")

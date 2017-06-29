@@ -52,14 +52,12 @@ class setup_hold():
         stimuli.inst_model(stim_file=self.sf,
                            pins=self.pins,
                            model_name=self.model_name)
-        self.sf.write("\n")
 
         # create a buffer for the inputs
         self.sf.write("* Buffer subckt\n")
         stimuli.create_buffer(stim_file=self.sf,
                               buffer_name="buffer",
                               size=[1, 1])
-        self.sf.write("\n")
 
         self.write_data(mode=mode,
                         target_time=target_time,
@@ -80,13 +78,11 @@ class setup_hold():
     def write_header(self, correct_value, period):
         """ Write the header file with all the models and the power supplies. """
         self.sf.write("* Stimulus for setup/hold: data {0} period {1}n\n".format(correct_value, period))
-        self.sf.write("\n")
 
         # include files in stimulus file
         self.model_list = tech.spice["fet_models"] + [self.model_location]
         stimuli.write_include(stim_file=self.sf,
                               models=self.model_list)
-        self.sf.write("\n")
 
         # add vdd/gnd statements
         self.sf.write("* Global Power Supplies\n")
@@ -95,13 +91,12 @@ class setup_hold():
                              gnd_name=tech.spice["gnd_name"],
                              vdd_voltage=vdd,
                              gnd_voltage=gnd)
-        self.sf.write("\n")
 
 
     def write_data(self, mode, period, target_time, correct_value):
         """ Create the buffered data signals for setup/hold analysis """
         self.sf.write("* Buffer for the DATA signal\n")
-        stimuli.add_buffer(stim_file=self.sf,
+        stimuli.inst_buffer(stim_file=self.sf,
                            buffer_name="buffer",
                            signal_list=["DATA"])
         self.sf.write("* Generation of the data and clk signals\n")
@@ -121,12 +116,11 @@ class setup_hold():
                           period=2*period,
                           t_rise=tech.spice["rise_time"],
                           t_fall=tech.spice["fall_time"])
-        self.sf.write("\n")
 
     def write_clock(self,period):
         """ Create the buffered clock signal for setup/hold analysis """
         self.sf.write("* Buffer for the clk signal\n")
-        stimuli.add_buffer(stim_file=self.sf,
+        stimuli.inst_buffer(stim_file=self.sf,
                            buffer_name="buffer",
                            signal_list=["clk"])
         self.sf.write("\n")
