@@ -62,11 +62,7 @@ class delay():
         # add vdd/gnd statements
 
         self.sf.write("* Global Power Supplies\n")
-        stimuli.write_supply(stim_file=self.sf,
-                             vdd_name=tech.spice["vdd_name"],
-                             gnd_name=tech.spice["gnd_name"],
-                             vdd_voltage=self.vdd,
-                             gnd_voltage=self.gnd)
+        stimuli.write_supply(self.sf)
 
         # instantiate the sram
         self.sf.write("* Instantiation of the SRAM\n")
@@ -188,6 +184,26 @@ class delay():
                                trig_dir="FALL",
                                targ_dir="RISE",
                                td=self.cycle_times[self.read1_cycle])
+
+        stimuli.gen_meas_delay(stim_file=self.sf,
+                               meas_name="SLEW0",
+                               trig_name=targ_name,
+                               targ_name=targ_name,
+                               trig_val=0.9*self.vdd,
+                               targ_val=0.1*self.vdd,
+                               trig_dir="FALL",
+                               targ_dir="FALL",
+                               td=self.cycle_times[self.read0_cycle])
+
+        stimuli.gen_meas_delay(stim_file=self.sf,
+                               meas_name="SLEW1",
+                               trig_name=targ_name,
+                               targ_name=targ_name,
+                               trig_val=0.1*self.vdd,
+                               targ_val=0.9*self.vdd,
+                               trig_dir="RISE",
+                               targ_dir="RISE",
+                               td=self.cycle_times[self.read1_cycle])
         
         # add measure statements for power
         t_initial = self.cycle_times[self.write0_cycle]
@@ -220,15 +236,24 @@ class delay():
         
 
 
-
-    def find_feasible_period(self,initial_period):
+    def find_delay_slew(self,period):
         """Uses an initial period and finds a feasible period before we
         run the binary search algorithm to find min period. We check if
         the given clock period is valid and if it's not, we continue to
         double the period until we find a valid period to use as a
         starting point. """
 
-        feasible_period = initial_period
+        (success, feasible_delay1, feasible_slew1, feasible_delay0, feasible_slew0)=self.run_simulation(period)
+        return (feasible_period, feasible_delay1, feasible_slew1, feasible_delay0, feasible_slew0)
+
+    def find_feasible_period(self):
+        """Uses an initial period and finds a feasible period before we
+        run the binary search algorithm to find min period. We check if
+        the given clock period is valid and if it's not, we continue to
+        double the period until we find a valid period to use as a
+        starting point. """
+
+        feasible_period = tech.spice["feasible_period"]
         time_out = 8
         while True:
             debug.info(1, "Finding feasible period: {0}ns".format(feasible_period))
@@ -237,40 +262,44 @@ class delay():
             if (time_out <= 0):
                 debug.error("Timed out, could not find a feasible period.",2)
 
-            (success, feasible_delay0, feasible_delay1)=self.try_feasible_period(feasible_period)                
+            (success, feasible_delay1, feasible_slew1, feasible_delay0, feasible_slew0)=self.run_simulation(feasible_period)                
             if not success:
                 feasible_period = 2 * feasible_period
                 continue
 
-            debug.info(1, "Starting Binary Search Algorithm with feasible_period: {0}ns feasible_delay0/1 {1}ns/{2}ns".format(feasible_period,feasible_delay0,feasible_delay1))
-            return (feasible_period, feasible_delay0, feasible_delay1)
+            debug.info(1, "Found feasible_period: {0}ns feasible_delay1/0 {1}ns/{2}ns".format(feasible_period,feasible_delay1,feasible_delay0))
+            return feasible_period
 
 
-    def try_feasible_period(self, period):
+    def run_simulation(self, period):
         """ This tries to simulate a period and checks if the result
-        works. If so, it returns True and the feasible output delay."""
+        works. If so, it returns True and the delays and slews."""
 
         # Checking from not data_value to data_value
         self.write_stimulus(period)
         stimuli.run_sim()
         delay0 = ch.convert_to_float(ch.parse_output("timing", "delay0"))
         delay1 = ch.convert_to_float(ch.parse_output("timing", "delay1"))        
+        slew0 = ch.convert_to_float(ch.parse_output("timing", "slew0"))
+        slew1 = ch.convert_to_float(ch.parse_output("timing", "slew1"))        
         
         # if it failed or the read was longer than a period
-        if type(delay0)!=float or type(delay1)!=float:
-            return (False,0,0)
+        if type(delay0)!=float or type(delay1)!=float or type(slew1)!=float or type(slew0)!=float:
+            return (False,0,0,0,0)
         else:
             delay0 *= 1e9
             delay1 *= 1e9
-            debug.info(2,"Feasible period {0}, delay0={1}n delay1={2}ns".format(period,delay0,delay1))
+            slew0 *= 1e9
+            slew1 *= 1e9
+            debug.info(2,"Simulation w/ period {0}, delay0={1}n delay1={2}ns".format(period,delay0,delay1))
         #key=raw_input("press return to continue")
 
         # The delay is from the negative edge for our SRAM
-        return (True,delay0,delay1)
+        return (True,delay1,slew1,delay0,slew0)
 
 
 
-    def find_min_period(self,feasible_period,feasible_delay0, feasible_delay1):
+    def find_min_period(self,feasible_period,feasible_delay1, feasible_delay0):
         """Searches for the smallest period with output delays being within 5% of 
         long period. """
 
@@ -289,7 +318,7 @@ class delay():
                                                                              ub_period,
                                                                              lb_period))
 
-            if self.try_period(target_period, feasible_delay0, feasible_delay1):
+            if self.try_period(target_period, feasible_delay1, feasible_delay0):
                 ub_period = target_period
             else:
                 lb_period = target_period
@@ -299,7 +328,7 @@ class delay():
                 return ub_period
 
 
-    def try_period(self, period, feasible_delay0, feasible_delay1):
+    def try_period(self, period, feasible_delay1, feasible_delay0):
         """ This tries to simulate a period and checks if the result
         works. If it does and the delay is within 5% still, it returns True."""
 
@@ -333,33 +362,54 @@ class delay():
         self.probe_address = probe_address
         self.probe_data = probe_data
 
-    def analyze(self,probe_address, probe_data, slew=tech.spice["rise_time"], load=1):
+    def analyze(self,probe_address, probe_data, slews, loads):
         """main function to calculate the min period for a low_to_high
         transistion and a high_to_low transistion returns a dictionary
         that contains all both the min period and associated delays
         Dictionary Keys: min_period1, delay1, min_period0, delay0
         """
-        self.slew = slew
-        self.load = load
+        
         self.set_probe(probe_address, probe_data)
 
-        (feasible_period, feasible_delay1, feasible_delay0) = self.find_feasible_period(tech.spice["feasible_period"])
-        
-        min_period = self.find_min_period(feasible_period, feasible_delay1, tech.spice["supply_voltage"])
-        if min_period == None:
-            return None
-        debug.info(1, "Min Period: {0}n with a delay of {1}".format(min_period, feasible_delay1))
-        
+        self.slew = slews[0]
+        self.load = loads[0]
+        feasible_period = self.find_feasible_period()
+
+        # The power variables are just scalars. These use the final feasible period simulation
+        # which should have worked.
         read0_power=ch.convert_to_float(ch.parse_output("timing", "read0_power"))
         write0_power=ch.convert_to_float(ch.parse_output("timing", "write0_power"))
         read1_power=ch.convert_to_float(ch.parse_output("timing", "read1_power"))
         write1_power=ch.convert_to_float(ch.parse_output("timing", "write1_power"))
+        
+        LH_delay = []
+        HL_delay = []
+        LH_slew = []
+        HL_slew = []
+        for self.slew in slews:
+            for self.load in loads:
+                (success, delay1, slew1, delay0, slew0) = self.run_simulation(feasible_period)
+                debug.check(success,"Couldn't run a simulation properly.\n")
+                LH_delay.append(delay1)
+                HL_delay.append(delay0)
+                LH_slew.append(slew1)
+                HL_slew.append(slew0)
+                
+        # finds the minimum period without degrading the delays by X%
+        min_period = self.find_min_period(feasible_period, feasible_delay1, feasible_delay0)
+        debug.check(type(min_period)==float,"Couldn't find minimum period.")
+        debug.info(1, "Min Period: {0}n with a delay of {1}".format(min_period, feasible_delay1))
 
-        data = {"min_period": min_period, 
-                "delay1": feasible_delay1, 
-                "delay0": feasible_delay0,
-                "read_power": (read0_power+read1_power)/2,
-                "write_power": (write0_power+write1_power)/2
+
+        data = {"min_period": ch.round_time(min_period), 
+                "delay1": LH_delay,
+                "delay0": HL_delay,
+                "slew1": LH_slew,
+                "slew0": HL_slew,
+                "read0_power": read0_power*1e3,
+                "read1_power": read1_power*1e3,
+                "write0_power": write0_power*1e3,
+                "write1_power": write1_power*1e3
                 }
         return data
 

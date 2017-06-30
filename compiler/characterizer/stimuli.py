@@ -14,8 +14,8 @@ import numpy as np
 
 OPTS = globals.get_opts()
 
-vdd = tech.spice["supply_voltage"]
-gnd = tech.spice["gnd_voltage"]
+vdd_voltage = tech.spice["supply_voltage"]
+gnd_voltage = tech.spice["gnd_voltage"]
 vdd_name = tech.spice["vdd_name"]
 gnd_name = tech.spice["gnd_name"]
 pmos_name = tech.spice["pmos_name"]
@@ -120,7 +120,7 @@ def inst_accesstx(stim_file, dbits):
                                                   2 * tx_width,
                                                   tx_length))
 
-def gen_pulse(stim_file, sig_name, v1=gnd, v2=vdd, offset=0, period=1, t_rise=0, t_fall=0):
+def gen_pulse(stim_file, sig_name, v1=gnd_voltage, v2=vdd_voltage, offset=0, period=1, t_rise=0, t_fall=0):
     """Generates a periodic signal with 50% duty cycle and slew rates. Period is measured
     from 50% to 50%."""
     pulse_string="V{0} {0} 0 PULSE ({1} {2} {3}n {4}n {5}n {6}n {7}n)\n"
@@ -139,7 +139,7 @@ def gen_pwl(stim_file, sig_name, clk_times, data_values, period, slew):
     debug.check(len(clk_times)+1==len(data_values),"Clock and data value lengths don't match.")
     # shift signal times 5% earlier for setup time
     times = np.array(clk_times) - 0.05*period
-    values = np.array(data_values) * vdd
+    values = np.array(data_values) * vdd_voltage
     half_slew = 0.5 * slew
     stim_file.write("V{0} {0} 0 PWL (0n {1}v ".format(sig_name, values[0]))
     for i in range(len(times)):
@@ -204,17 +204,17 @@ def gen_web_trans(stim_file, clk_times, period, slew):
 
 
 def get_inverse_value(value):
-    if value > 0.5*vdd:
-        return gnd
-    elif value <= 0.5*vdd:
-        return vdd
+    if value > 0.5*vdd_voltage:
+        return gnd_voltage
+    elif value <= 0.5*vdd_voltage:
+        return vdd_voltage
     else:
         debug.error("Invalid value to get an inverse of: {0}".format(value))
 
 
 def gen_meas_delay(stim_file, meas_name, trig_name, targ_name, trig_val, targ_val, trig_dir, targ_dir, td):
     """Creates the .meas statement for the measurement of delay"""
-    measure_string=".meas tran {0} TRIG v({1}) VAL={2} {3}=1 TD={7}n TARG v({4}) VAL={5} {6}=1\n\n"
+    measure_string=".meas tran {0} TRIG v({1}) VAL={2} {3}=1 TD={7}n TARG v({4}) VAL={5} {6}=1 TD={7}n\n\n"
     stim_file.write(measure_string.format(meas_name,
                                           trig_name,
                                           trig_val,
@@ -239,9 +239,12 @@ def gen_meas_power(stim_file, meas_name, t_initial, t_final):
     
 def write_control(stim_file, end_time):
     stim_file.write(".TRAN 5p {0}n\n".format(end_time))
-    stim_file.write(".OPTIONS POST=1 RUNLEVEL=4 PROBE\n")
+    stim_file.write(".OPTIONS POST=1 RUN_LEVEL=4 PROBE\n")
     # create plots for all signals
-    stim_file.write(".probe V(*)\n")
+    stim_file.write("* probe is used for hspice\n")    
+    stim_file.write("*.probe V(*)\n")
+    stim_file.write("* plot is used for ngspice interactive mode \n")    
+    stim_file.write("*.plot V(*)\n")
     # end the stimulus file
     stim_file.write(".end\n\n")
 
@@ -252,7 +255,7 @@ def write_include(stim_file, models):
         stim_file.write(".include \"{0}\"\n\n".format(item))
 
 
-def write_supply(stim_file, vdd_name, gnd_name, vdd_voltage, gnd_voltage):
+def write_supply(stim_file):
     """Writes supply voltage statements"""
     stim_file.write("V{0} {0} 0.0 {1}\n".format(vdd_name, vdd_voltage))
     stim_file.write("V{0} {0} 0.0 {1}\n".format(gnd_name, gnd_voltage))
