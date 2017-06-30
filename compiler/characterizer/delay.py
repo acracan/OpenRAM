@@ -268,7 +268,7 @@ class delay():
                 continue
 
             debug.info(1, "Found feasible_period: {0}ns feasible_delay1/0 {1}ns/{2}ns".format(feasible_period,feasible_delay1,feasible_delay0))
-            return feasible_period
+            return (feasible_period, feasible_delay1, feasible_delay0)
 
 
     def run_simulation(self, period):
@@ -373,7 +373,7 @@ class delay():
 
         self.slew = slews[0]
         self.load = loads[0]
-        feasible_period = self.find_feasible_period()
+        (feasible_period, feasible_delay1, feasible_delay0) = self.find_feasible_period()
 
         # The power variables are just scalars. These use the final feasible period simulation
         # which should have worked.

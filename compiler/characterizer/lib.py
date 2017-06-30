@@ -382,6 +382,7 @@ class lib:
             probe_address = "1" * self.addr_size
             probe_data = self.word_size - 1
             if self.use_model:
+                self.d = True
                 self.delay = self.sram.analytical_model(self.slews,self.loads)
             else:
                 self.delay = self.d.analyze(probe_address, probe_data, self.slews, self.loads)
@@ -393,5 +394,8 @@ class lib:
             self.sh
         except AttributeError:
             self.sh = setup_hold.setup_hold()
-            self.times = self.sh.analyze(self.slews,self.slews)
+            if self.use_model:
+                self.times = self.sh.analytical_model(self.slews,self.loads)
+            else:
+                self.times = self.sh.analyze(self.slews,self.slews)
                 

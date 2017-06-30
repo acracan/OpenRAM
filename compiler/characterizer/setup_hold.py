@@ -292,3 +292,25 @@ class setup_hold():
                  }
         return times
 
+    def analytical_model(self,related_slews, constrained_slews):
+        """ Just return the fixed setup/hold times from the technology.
+        """
+        LH_setup = []
+        HL_setup = []
+        LH_hold = []
+        HL_hold = []
+        
+        for self.related_input_slew in related_slews:
+            for self.constrained_input_slew in constrained_slews:
+                # convert from ps to ns
+                LH_setup.append(tech.spice["msflop_setup"]/1e3)
+                HL_setup.append(tech.spice["msflop_setup"]/1e3)
+                LH_hold.append(tech.spice["msflop_hold"]/1e3)
+                HL_hold.append(tech.spice["msflop_hold"]/1e3)
+                
+        times = {"setup_times_LH": LH_setup,
+                 "setup_times_HL": HL_setup,
+                 "hold_times_LH": LH_hold,
+                 "hold_times_HL": HL_hold
+                 }
+        return times
